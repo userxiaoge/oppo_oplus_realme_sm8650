@@ -30,6 +30,8 @@ read -p "是否启用三星SSG IO调度器？(y/n，默认：y): " APPLY_SSG
 APPLY_SSG=${APPLY_SSG:-y}
 read -p "是否启用Re-Kernel？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
+read -p "是否启用内核级基带保护？(y/n，默认：n): " APPLY_BBG
+APPLY_BBG=${APPLY_BBG:-n}
 read -p "是否安装风驰内核驱动（未完成）？(y/n，默认：n): " APPLY_SCX
 APPLY_SCX=${APPLY_SCX:-n}
 
@@ -53,6 +55,7 @@ echo "应用网络功能增强优化配置: $APPLY_BETTERNET"
 echo "应用 BBR 等算法: $APPLY_BBR"
 echo "启用三星SSG IO调度器: $APPLY_SSG"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
+echo "启用内核级基带保护: $APPLY_BBG"
 echo "应用风驰内核驱动: $APPLY_SCX"
 echo "===================="
 echo
@@ -117,13 +120,13 @@ if [[ "$KSU_BRANCH" == "y" ]]; then
   git clone https://github.com/shirkneko/susfs4ksu.git -b gki-android14-6.1
   git clone https://github.com/ShirkNeko/SukiSU_patch.git
   cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch ./common/
-  cp ./SukiSU_patch/hooks/syscall_hooks.patch ./common/
+  cp ./SukiSU_patch/hooks/scope_min_manual_hooks_v1.5.patch ./common/
   cp ./SukiSU_patch/69_hide_stuff.patch ./common/
   cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
   cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
   cd ./common
   patch -p1 < 50_add_susfs_in_gki-android14-6.1.patch || true
-  patch -p1 < syscall_hooks.patch || true
+  patch -p1 < scope_min_manual_hooks_v1.5.patch || true
   patch -p1 -F 3 < 69_hide_stuff.patch || true
 else
   git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1
@@ -131,11 +134,11 @@ else
   cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch ./common/
   cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
   cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-  cp ./kernel_patches/next/scope_min_manual_hooks_v1.4.patch ./common/
+  cp ./kernel_patches/next/scope_min_manual_hooks_v1.5.patch ./common/
   cp ./kernel_patches/69_hide_stuff.patch ./common/
   cd ./common
   patch -p1 < 50_add_susfs_in_gki-android14-6.1.patch || true
-  patch -p1 -N -F 3 < scope_min_manual_hooks_v1.4.patch || true
+  patch -p1 -N -F 3 < scope_min_manual_hooks_v1.5.patch || true
   patch -p1 -N -F 3 < 69_hide_stuff.patch || true
 fi
 cd ../
@@ -288,6 +291,36 @@ fi
 if [[ "$APPLY_REKERNEL" == "y" || "$APPLY_REKERNEL" == "Y" ]]; then
   echo ">>> 正在启用Re-Kernel..."
   echo "CONFIG_REKERNEL=y" >> "$DEFCONFIG_FILE"
+fi
+
+# ===== 启用内核级基带保护 =====
+if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
+  echo ">>> 正在启用内核级基带保护..."
+  echo "CONFIG_BBG=y" >> "$DEFCONFIG_FILE"
+  cd ./common/security
+  wget https://github.com/cctv18/Baseband-guard/archive/refs/heads/master.zip
+  unzip -q master.zip
+  mv "Baseband-guard-master" baseband-guard
+  printf '\nobj-$(CONFIG_BBG) += baseband-guard/\n' >> ./Makefile
+  sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/landlock/landlock,baseband_guard/ } }' ./Kconfig
+  awk '
+  /endmenu/ { last_endmenu_line = NR }
+  { lines[NR] = $0 }
+  END {
+    for (i=1; i<=NR; i++) {
+      if (i == last_endmenu_line) {
+        sub(/endmenu/, "", lines[i]);
+        print lines[i] "source \"security/baseband-guard/Kconfig\""
+        print ""
+        print "endmenu"
+      } else {
+          print lines[i]
+      }
+    }
+  }
+  ' ./Kconfig > Kconfig.tmp && mv Kconfig.tmp ./Kconfig
+  sed -i 's/selinuxfs.o //g' "./selinux/Makefile"
+  cat "./baseband-guard/sepatch.txt" >> "./selinux/Makefile"
 fi
 
 # ===== 禁用 defconfig 检查 =====

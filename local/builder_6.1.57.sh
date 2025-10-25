@@ -8,20 +8,19 @@ cd "$SCRIPT_DIR"
 # ===== 设置自定义参数 =====
 echo "===== 欧加真SM8650通用6.1.57 A14 OKI内核本地编译脚本 By Coolapk@cctv18 ====="
 echo ">>> 读取用户配置..."
-SOC_BRANCH=${SOC_BRANCH:-sm8650}
 MANIFEST=${MANIFEST:-oppo+oplus+realme}
 read -p "请输入自定义内核后缀（默认：android14-11-o-gca13bffobf09）: " CUSTOM_SUFFIX
 CUSTOM_SUFFIX=${CUSTOM_SUFFIX:-android14-11-o-gca13bffobf09}
-read -p "是否启用 KPM？(y/n，默认：y): " USE_PATCH_LINUX
-USE_PATCH_LINUX=${USE_PATCH_LINUX:-y}
+read -p "是否启用 KPM？(y/n，默认：n): " USE_PATCH_LINUX
+USE_PATCH_LINUX=${USE_PATCH_LINUX:-n}
 read -p "KSU分支版本(y=SukiSU Ultra, n=KernelSU Next, 默认：y): " KSU_BRANCH
 KSU_BRANCH=${KSU_BRANCH:-y}
-read -p "是否应用 kprobes钩子？(y/n，默认：n): " APPLY_KPROBES
-APPLY_KPROBES=${APPLY_KPROBES:-n}
+read -p "应用钩子类型 (manual/syscall/kprobes, m/s/k, 默认m): " APPLY_HOOKS
+APPLY_HOOKS=${APPLY_HOOKS:-m}
 read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APPLY_LZ4
 APPLY_LZ4=${APPLY_LZ4:-y}
-read -p "是否应用 lz4kd 补丁？(y/n，默认：y): " APPLY_LZ4KD
-APPLY_LZ4KD=${APPLY_LZ4KD:-y}
+read -p "是否应用 lz4kd 补丁？(y/n，默认：n): " APPLY_LZ4KD
+APPLY_LZ4KD=${APPLY_LZ4KD:-n}
 read -p "是否启用网络功能增强优化配置？(y/n，默认：y): " APPLY_BETTERNET
 APPLY_BETTERNET=${APPLY_BETTERNET:-y}
 read -p "是否添加 BBR 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
@@ -30,10 +29,8 @@ read -p "是否启用三星SSG IO调度器？(y/n，默认：y): " APPLY_SSG
 APPLY_SSG=${APPLY_SSG:-y}
 read -p "是否启用Re-Kernel？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
-read -p "是否启用内核级基带保护？(y/n，默认：n): " APPLY_BBG
-APPLY_BBG=${APPLY_BBG:-n}
-read -p "是否安装风驰内核驱动（未完成）？(y/n，默认：n): " APPLY_SCX
-APPLY_SCX=${APPLY_SCX:-n}
+read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
+APPLY_BBG=${APPLY_BBG:-y}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -43,12 +40,11 @@ fi
 
 echo
 echo "===== 配置信息 ====="
-echo "SoC 分支: $SOC_BRANCH"
 echo "适用机型: $MANIFEST"
 echo "自定义内核后缀: -$CUSTOM_SUFFIX"
 echo "KSU分支版本: $KSU_TYPE"
 echo "启用 KPM: $USE_PATCH_LINUX"
-echo "使用 kprobes钩子: $APPLY_KPROBES"
+echo "钩子类型: $APPLY_HOOKS"
 echo "应用 lz4&zstd 补丁: $APPLY_LZ4"
 echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
 echo "应用网络功能增强优化配置: $APPLY_BETTERNET"
@@ -56,7 +52,6 @@ echo "应用 BBR 等算法: $APPLY_BBR"
 echo "启用三星SSG IO调度器: $APPLY_SSG"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
-echo "应用风驰内核驱动: $APPLY_SCX"
 echo "===================="
 echo
 
@@ -66,11 +61,11 @@ cd "$WORKDIR"
 
 # ===== 安装构建依赖 =====
 echo ">>> 安装构建依赖..."
+sudo apt-mark hold firefox && apt-mark hold libc-bin && apt-mark hold man-db
+sudo rm -rf /var/lib/man-db/auto-update
 sudo apt-get update
-sudo apt-get install curl bison flex make binutils dwarves git lld pahole zip perl make gcc python3 python-is-python3 bc libssl-dev libelf-dev -y
-sudo rm -rf ./llvm.sh
-sudo wget https://apt.llvm.org/llvm.sh
-sudo chmod +x llvm.sh
+sudo apt-get install --no-install-recommends -y curl bison flex clang binutils dwarves git lld pahole zip perl make gcc python3 python-is-python3 bc libssl-dev libelf-dev
+sudo rm -rf ./llvm.sh && wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh
 sudo ./llvm.sh 20 all
 
 # ===== 初始化仓库 =====
@@ -120,13 +115,23 @@ if [[ "$KSU_BRANCH" == "y" ]]; then
   git clone https://github.com/shirkneko/susfs4ksu.git -b gki-android14-6.1
   git clone https://github.com/ShirkNeko/SukiSU_patch.git
   cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch ./common/
-  cp ./SukiSU_patch/hooks/scope_min_manual_hooks_v1.5.patch ./common/
+  if [[ "$APPLY_HOOKS" == "m" || "$APPLY_HOOKS" == "M" ]]; then
+    cp ./SukiSU_patch/hooks/scope_min_manual_hooks_v1.5.patch ./common/
+  fi
+  if [[ "$APPLY_HOOKS" == "s" || "$APPLY_HOOKS" == "S" ]]; then
+    cp ./SukiSU_patch/hooks/syscall_hooks.patch ./common/
+  fi
   cp ./SukiSU_patch/69_hide_stuff.patch ./common/
   cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
   cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
   cd ./common
   patch -p1 < 50_add_susfs_in_gki-android14-6.1.patch || true
-  patch -p1 < scope_min_manual_hooks_v1.5.patch || true
+  if [[ "$APPLY_HOOKS" == "m" || "$APPLY_HOOKS" == "M" ]]; then
+    patch -p1 < scope_min_manual_hooks_v1.5.patch || true
+  fi
+  if [[ "$APPLY_HOOKS" == "s" || "$APPLY_HOOKS" == "S" ]]; then
+    patch -p1 < syscall_hooks.patch || true
+  fi
   patch -p1 -F 3 < 69_hide_stuff.patch || true
 else
   git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1
@@ -134,12 +139,27 @@ else
   cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch ./common/
   cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
   cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-  cp ./kernel_patches/next/scope_min_manual_hooks_v1.5.patch ./common/
+  if [[ "$APPLY_HOOKS" == "m" || "$APPLY_HOOKS" == "M" ]]; then
+    cp ./kernel_patches/next/scope_min_manual_hooks_v1.5.patch ./common/
+  fi
+  if [[ "$APPLY_HOOKS" == "s" || "$APPLY_HOOKS" == "S" ]]; then
+    cp ./kernel_patches/next/syscall_hooks.patch ./common/
+  fi
   cp ./kernel_patches/69_hide_stuff.patch ./common/
   cd ./common
   patch -p1 < 50_add_susfs_in_gki-android14-6.1.patch || true
-  patch -p1 -N -F 3 < scope_min_manual_hooks_v1.5.patch || true
+  if [[ "$APPLY_HOOKS" == "m" || "$APPLY_HOOKS" == "M" ]]; then
+    patch -p1 -N -F 3 < scope_min_manual_hooks_v1.5.patch || true
+  fi
+  if [[ "$APPLY_HOOKS" == "s" || "$APPLY_HOOKS" == "S" ]]; then
+    patch -p1 -N -F 3 < syscall_hooks.patch || true
+  fi
   patch -p1 -N -F 3 < 69_hide_stuff.patch || true
+  #为KernelSU Next添加WildKSU管理器支持
+  cd ./drivers/kernelsu
+  wget https://github.com/WildKernels/kernel_patches/raw/refs/heads/main/next/susfs_fix_patches/v1.5.12/fix_apk_sign.c.patch
+  patch -p2 -N -F 3 < fix_apk_sign.c.patch || true
+  cd ../../
 fi
 cd ../
 
@@ -199,9 +219,12 @@ CONFIG_KSU_SUSFS_ENABLE_LOG=y
 CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
 CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
 CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+#添加对 Mountify (backslashxx/mountify) 模块的支持
+CONFIG_TMPFS_XATTR=y
+CONFIG_TMPFS_POSIX_ACL=y
 EOF
 
-if [[ "$APPLY_KPROBES" == "y" || "$APPLY_KPROBES" == "Y" ]]; then
+if [[ "$APPLY_HOOKS" == "k" || "$APPLY_HOOKS" == "K" ]]; then
   echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KSU_MANUAL_HOOK=n" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KSU_KPROBES_HOOK=y" >> "$DEFCONFIG_FILE"
@@ -302,7 +325,7 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   unzip -q master.zip
   mv "Baseband-guard-master" baseband-guard
   printf '\nobj-$(CONFIG_BBG) += baseband-guard/\n' >> ./Makefile
-  sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/landlock/landlock,baseband_guard/ } }' ./Kconfig
+  sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/lockdown/lockdown,baseband_guard/ } }' ./Kconfig
   awk '
   /endmenu/ { last_endmenu_line = NR }
   { lines[NR] = $0 }
@@ -320,7 +343,9 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   }
   ' ./Kconfig > Kconfig.tmp && mv Kconfig.tmp ./Kconfig
   sed -i 's/selinuxfs.o //g' "./selinux/Makefile"
+  sed -i 's/hooks.o //g' "./selinux/Makefile"
   cat "./baseband-guard/sepatch.txt" >> "./selinux/Makefile"
+  cd ../../
 fi
 
 # ===== 禁用 defconfig 检查 =====
@@ -336,12 +361,6 @@ done
 # ===== 编译内核 =====
 echo ">>> 开始编译内核..."
 cd common
-if [[ "$APPLY_SCX" == "y" || "$APPLY_SCX" == "Y" ]]; then
-  git clone https://github.com/cctv18/sched_ext.git
-  rm -rf ./sched_ext/.git
-  rm -rf ./sched_ext/README.md
-  cp -r ./sched_ext/* ./kernel/sched
-fi
 make -j$(nproc --all) LLVM=-20 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnuabeihf- CC=clang LD=ld.lld HOSTCC=clang HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig all
 echo ">>> 内核编译成功！"
 
@@ -380,17 +399,33 @@ if [[ "$APPLY_LZ4KD" == "y" || "$APPLY_LZ4KD" == "Y" ]]; then
 fi
 
 # ===== 生成 ZIP 文件名 =====
-MANIFEST_BASENAME=${MANIFEST}
-ZIP_NAME="Anykernel3-${MANIFEST_BASENAME}"
+ZIP_NAME="Anykernel3-${MANIFEST}"
 
-if [[ "$APPLY_LZ4KD" == "y" || "$USE_PATCH_LINUX" == "y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-lz4kd-kpm-vfs"
-elif [[ "$APPLY_LZ4KD" == "y" || "$APPLY_LZ4KD" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-lz4kd-vfs"
-elif [[ "$USE_PATCH_LINUX" == "y" || "$USE_PATCH_LINUX" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-kpm-vfs"
+if [[ "$APPLY_HOOKS" == "m" || "$APPLY_HOOKS" == "M" ]]; then
+  ZIP_NAME="${ZIP_NAME}-manual"
+elif [[ "$APPLY_HOOKS" == "s" || "$APPLY_HOOKS" == "S" ]]; then
+  ZIP_NAME="${ZIP_NAME}-syscall"
+else
+  ZIP_NAME="${ZIP_NAME}-kprobe"
 fi
-
+if [[ "$APPLY_LZ4KD" == "y" || "$APPLY_LZ4KD" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-lz4kd"
+fi
+if [[ "$APPLY_LZ4" == "y" || "$APPLY_LZ4" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-lz4-zstd"
+fi
+if [[ "$USE_PATCH_LINUX" == "y" || "$USE_PATCH_LINUX" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-kpm"
+fi
+if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-bbr"
+if [[ "$APPLY_SSG" == "y" || "$APPLY_SSG" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-ssg"
+if [[ "$APPLY_REKERNEL" == "y" || "$APPLY_REKERNEL" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-rek"
+if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-bbg"
+fi
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
 
 # ===== 打包 ZIP 文件，包括 zram.zip（如果存在） =====
